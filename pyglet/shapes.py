@@ -51,12 +51,11 @@ from abc import ABC, abstractmethod
 
 import pyglet
 
-from pyglet.gl import GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA
+from pyglet.gl import GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_DEPTH_TEST, GL_CULL_FACE
 from pyglet.gl import GL_TRIANGLES, GL_LINES, GL_BLEND
 from pyglet.gl import glBlendFunc, glEnable, glDisable
 from pyglet.graphics import Batch, Group
-from pyglet.math import Vec2
-
+from pyglet.math import Vec2, Vec3
 
 vertex_source = """#version 150 core
     in vec2 position;
@@ -433,9 +432,9 @@ class ShapeBase(ABC):
         if self._group.parent == group:
             return
         self._group = self.group_class(self._group.blend_src,
-                                  self._group.blend_dest,
-                                  self._group.program,
-                                  group)
+                                       self._group.blend_dest,
+                                       self._group.program,
+                                       group)
         self._batch.migrate(self._vertex_list, self._draw_mode, self._group,
                             self._batch)
 
@@ -756,7 +755,7 @@ class Circle(ShapeBase):
 
     def _create_vertex_list(self):
         self._vertex_list = self._group.program.vertex_list(
-            self._segments*3, self._draw_mode, self._batch, self._group,
+            self._segments * 3, self._draw_mode, self._batch, self._group,
             colors=('Bn', self._rgba * self._num_verts),
             translation=('f', (self._x, self._y) * self._num_verts))
 
@@ -852,7 +851,7 @@ class Ellipse(ShapeBase):
 
     def _create_vertex_list(self):
         self._vertex_list = self._group.program.vertex_list(
-            self._segments*3, self._draw_mode, self._batch, self._group,
+            self._segments * 3, self._draw_mode, self._batch, self._group,
             colors=('Bn', self._rgba * self._num_verts),
             translation=('f', (self._x, self._y) * self._num_verts))
 
@@ -1125,7 +1124,7 @@ class Line(ShapeBase):
         x1, y1, x2, y2 = self._x, self._y, self._x2, self._y2
         # The following is the expansion of the determinant of a 3x3 matrix
         # used to calculate the area of a triangle.
-        double_area = abs(a*y1+b*x2+x1*y2-x2*y1-a*y2-b*x1)
+        double_area = abs(a * y1 + b * x2 + x1 * y2 - x2 * y1 - a * y2 - b * x1)
         h = double_area / math.dist((self._x, self._y), (self._x2, self._y2))
         return h < self._width / 2
 
@@ -1156,7 +1155,7 @@ class Line(ShapeBase):
             dx = x1 * cr - y2 * sr
             dy = x1 * sr + y2 * cr
 
-            self._vertex_list.position[:] = (ax, ay,  bx, by,  cx, cy, ax, ay,  cx, cy,  dx, dy)
+            self._vertex_list.position[:] = (ax, ay, bx, by, cx, cy, ax, ay, cx, cy, dx, dy)
 
     @property
     def width(self):
@@ -1728,10 +1727,10 @@ class Star(ShapeBase):
             # calculate alternating points on outer and outer circles
             points = []
             for i in range(self._num_spikes):
-                points.append((x + (r_o * math.cos(2*i * d_theta)),
-                               y + (r_o * math.sin(2*i * d_theta))))
-                points.append((x + (r_i * math.cos((2*i+1) * d_theta)),
-                               y + (r_i * math.sin((2*i+1) * d_theta))))
+                points.append((x + (r_o * math.cos(2 * i * d_theta)),
+                               y + (r_o * math.sin(2 * i * d_theta))))
+                points.append((x + (r_i * math.cos((2 * i + 1) * d_theta)),
+                               y + (r_i * math.sin((2 * i + 1) * d_theta))))
 
             # create a list of doubled-up points from the points
             vertices = []
@@ -1863,4 +1862,302 @@ class Polygon(ShapeBase):
         self._vertex_list.rotation[:] = (rotation,) * self._num_verts
 
 
-__all__ = 'Arc', 'BezierCurve', 'Circle', 'Ellipse', 'Line', 'Rectangle', 'BorderedRectangle', 'Triangle', 'Star', 'Polygon', 'Sector'
+vertex_source_3d = """#version 150 core
+    in vec3 position;
+    in vec3 normals;
+    in vec3 translation;
+    in vec4 colors;
+    in float roll;
+    in float pitch;
+    in float yaw;
+
+
+    out vec4 vertex_colors;
+    out vec3 vertex_normals;
+    out vec3 vertex_position;
+
+    uniform WindowBlock
+    {
+        mat4 projection;
+        mat4 view;
+    } window;
+
+    mat4 m_roll = mat4(1.0);
+    mat4 m_pitch = mat4(1.0);
+    mat4 m_yaw = mat4(1.0);
+    mat4 m_translate = mat4(1.0);
+
+    void main()
+    {
+        m_translate[3][0] = translation.x;
+        m_translate[3][1] = translation.y;
+        m_translate[3][2] = translation.z;
+        
+        m_roll[0][0] =  cos(-radians(roll));
+        m_roll[0][1] =  sin(-radians(roll));
+        m_roll[1][0] = -sin(-radians(roll));
+        m_roll[1][1] =  cos(-radians(roll));
+        
+        m_pitch[0][0] =  cos(-radians(pitch));
+        m_pitch[0][2] = -sin(-radians(pitch));
+        m_pitch[2][0] =  sin(-radians(pitch));
+        m_pitch[2][2] =  cos(-radians(pitch));
+        
+        m_yaw[1][1] =  cos(-radians(yaw));
+        m_yaw[1][2] = -sin(-radians(yaw));
+        m_yaw[2][1] =  sin(-radians(yaw));
+        m_yaw[2][2] =  cos(-radians(yaw));
+        
+        mat4 model = m_translate * m_roll * m_pitch * m_yaw;
+        
+        vec4 pos = window.view * model * vec4(position, 1.0);
+        gl_Position = window.projection * pos;
+        mat3 normal_matrix = transpose(inverse(mat3(model)));
+        
+        vertex_position = pos.xyz;
+        vertex_colors = colors;
+        vertex_normals = normal_matrix * normals;
+    }
+"""
+
+fragment_source_3d = """#version 150 core
+    in vec4 vertex_colors;
+    in vec3 vertex_normals;
+    in vec3 vertex_position;
+    out vec4 final_color;
+
+    void main()
+    {
+        float l = dot(normalize(-vertex_position), normalize(vertex_normals));
+        final_color = vec4((vertex_colors * l * 1.2).rgb, vertex_colors.a);
+    }
+"""
+
+
+def get_default_3d_shader():
+    try:
+        return pyglet.gl.current_context.pyglet_shapes_default_3d_shader
+    except AttributeError:
+        _default_vert_shader = pyglet.graphics.shader.Shader(vertex_source_3d, 'vertex')
+        _default_frag_shader = pyglet.graphics.shader.Shader(fragment_source_3d, 'fragment')
+        default_shader_program = pyglet.graphics.shader.ShaderProgram(_default_vert_shader, _default_frag_shader)
+        pyglet.gl.current_context.pyglet_shapes_default_3d_shader = default_shader_program
+        return default_shader_program
+
+
+class _ShapeGroup3D(_ShapeGroup):
+    def set_state(self):
+        glEnable(GL_DEPTH_TEST)
+        glEnable(GL_CULL_FACE)
+        super().set_state()
+
+    def unset_state(self):
+        super().unset_state()
+        glDisable(GL_CULL_FACE)
+        glDisable(GL_DEPTH_TEST)
+
+
+class ShapeBase3D(ShapeBase, ABC):
+    """Base class for 3d shape objects.
+    """
+    _z = 0
+    _anchor_z = 0
+    group_class = _ShapeGroup3D
+
+    def _update_translation(self):
+        self._vertex_list.translation[:] = (self._x, self._y, self._z) * self._num_verts
+
+    @property
+    def z(self):
+        """Z coordinate of the shape.
+
+        :type: int or float
+        """
+        return self._z
+
+    @z.setter
+    def z(self, value):
+        self._z = value
+        self._update_translation()
+
+    @property
+    def position(self):
+        """The (x, y, z) coordinates of the shape, as a tuple.
+
+        :Parameters:
+            `x` : int or float
+                X coordinate of the sprite.
+            `y` : int or float
+                Y coordinate of the sprite.
+            `z` : int or float
+                Z coordinate of the sprite.
+        """
+        return self._x, self._y, self._z
+
+    @position.setter
+    def position(self, values):
+        self._x, self._y, self._z = values
+        self._update_translation()
+
+    @property
+    def anchor_z(self):
+        """The Z coordinate of the anchor point
+
+        :type: int or float
+        """
+        return self._anchor_z
+
+    @anchor_z.setter
+    def anchor_z(self, value):
+        self._anchor_z = value
+        self._update_vertices()
+
+    @property
+    def anchor_position(self):
+        """The (x, y, z) coordinates of the anchor point, as a tuple.
+
+        :Parameters:
+            `x` : int or float
+                X coordinate of the anchor point.
+            `y` : int or float
+                Y coordinate of the anchor point.
+            `z` : int or float
+                Z coordinate of the anchor point.
+        """
+        return self._anchor_x, self._anchor_y, self._anchor_z
+
+    @anchor_position.setter
+    def anchor_position(self, values):
+        self._anchor_x, self._anchor_y, self._anchor_z = values
+        self._update_vertices()
+
+
+class Cuboid(ShapeBase3D):
+    def __init__(self, x, y, z, width, height, depth, color=(255, 255, 255, 255),
+                 batch=None, group=None):
+        self._x = x
+        self._y = y
+        self._z = z
+        self._width = width
+        self._height = height
+        self._depth = depth
+
+        self._roll = 0  # Rotation in the x-axis
+        self._pitch = 0  # Rotation in the y-axis
+        self._yaw = 0  # Rotation in the z-axis
+
+        self._num_verts = 36
+
+        r, g, b, *a = color
+        self._rgba = r, g, b, a[0] if a else 255
+
+        self._batch = batch or Batch()
+        program = get_default_3d_shader()
+        self._group = self.group_class(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, program, group)
+
+        self._create_vertex_list()
+        self._update_vertices()
+
+    def _create_vertex_list(self):
+        self._vertex_list = self._group.program.vertex_list(
+            self._num_verts, self._draw_mode, self._batch, self._group,
+            colors=('Bn', self._rgba * self._num_verts),
+            translation=('f', (self._x, self._y, self._z) * self._num_verts),
+            normals=('f', (0, 0, 1) * 6 + (1, 0, 0) * 6 + (0, 0, -1) * 6
+                     + (-1, 0, 0) * 6 + (0, -1, 0) * 6 + (0, 1, 0) * 6))
+
+    def _update_vertices(self):
+        if not self._visible:
+            self._vertex_list.position[:] = (0, 0, 0) * self._num_verts
+        else:
+            x1 = -self._anchor_x
+            y1 = -self._anchor_y
+            z1 = -self._anchor_z
+            x2 = x1 + self._width
+            y2 = y1 + self._height
+            z2 = z1 + self._depth
+
+            vertices = (
+                # front
+                (x1, y1, z2),
+                (x2, y1, z2),
+                (x2, y2, z2),
+                (x1, y2, z2),
+                # back
+                (x1, y1, z1),
+                (x2, y1, z1),
+                (x2, y2, z1),
+                (x1, y2, z1)
+            )
+
+            indices = (
+                0, 1, 2, 2, 3, 0,  # front
+                1, 5, 6, 6, 2, 1,  # right
+                7, 6, 5, 5, 4, 7,  # back
+                4, 0, 3, 3, 7, 4,  # left
+                4, 5, 1, 1, 0, 4,  # bottom
+                3, 2, 6, 6, 7, 3,  # top
+            )
+
+            position = []
+            for i in indices:
+                position.extend(vertices[i])
+
+            self._vertex_list.position[:] = position
+
+    @property
+    def width(self):
+        return self._width
+
+    @width.setter
+    def width(self, width):
+        self._width = width
+        self._update_vertices()
+
+    @property
+    def height(self):
+        return self._height
+
+    @height.setter
+    def height(self, height):
+        self._height = height
+        self._update_vertices()
+
+    @property
+    def depth(self):
+        return self._depth
+
+    @depth.setter
+    def depth(self, depth):
+        self._depth = depth
+        self._update_vertices()
+
+    @property
+    def roll(self):
+        return self._roll
+
+    @roll.setter
+    def roll(self, roll):
+        self._roll = roll
+        self._vertex_list.roll[:] = (roll,) * self._num_verts
+
+    @property
+    def pitch(self):
+        return self._pitch
+
+    @pitch.setter
+    def pitch(self, pitch):
+        self._pitch = pitch
+        self._vertex_list.pitch[:] = (pitch,) * self._num_verts
+
+    @property
+    def yaw(self):
+        return self._yaw
+
+    @yaw.setter
+    def yaw(self, yaw):
+        self._yaw = yaw
+        self._vertex_list.yaw[:] = (yaw,) * self._num_verts
+
+
+__all__ = 'Arc', 'BezierCurve', 'Circle', 'Ellipse', 'Line', 'Rectangle', 'BorderedRectangle', 'Triangle', 'Star', 'Polygon', 'Sector', 'Cuboid'
