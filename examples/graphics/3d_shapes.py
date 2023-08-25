@@ -17,7 +17,6 @@ cube.anchor_x = cube.width / 2
 cube.anchor_y = cube.height / 2
 cube.anchor_z = cube.depth / 2
 
-
 @window.event
 def on_resize(width, height):
     window.viewport = (0, 0, *window.get_framebuffer_size())
